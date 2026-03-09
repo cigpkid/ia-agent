@@ -1,0 +1,74 @@
+services:
+  vllm:
+    build:
+      context: .
+      dockerfile: Dockerfile.vllm
+    environment:
+      # Evita fragmentación de memoria en PyTorch
+      PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
+      # Activar Flash Attention si tu GPU lo soporta
+      VLLM_USE_TRITON_FLASH_ATTN: "1"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    volumes:
+      # Mapeamos tu carpeta de cache
+      - ./ai-engine/models_cache:/root/.cache/huggingface
+    ports:
+      - "8000:8000"
+    command: >
+      --model Qwen/Qwen2-VL-7B-Instruct
+      --dtype float16
+      --max-model-len 1048
+      --gpu-memory-utilization 0.5
+      --download-dir /root/.cache/huggingface
+      --host 0.0.0.0
+      --enforce-eager
+      --quantization bitsandbytes
+    networks:
+      - ia-network
+
+
+    # MENSAJERÍA ENTRE MICROSERVICIOS
+  nats:
+    image: nats:latest
+    container_name: nats-server
+    ports:
+      - "4222:4222" # Cliente NATS
+      - "8222:8222" # Dashboard Monitoreo
+    networks:
+      - ia-network
+
+  # ORQUESTADOR (NestJS + MCP)
+  backend-gateway:
+    build: ./backend-gateway
+    container_name: nest-gateway
+    ports:
+      - "3000:3000"
+    environment:
+      - NATS_URL=nats://nats:4222
+      - OLLAMA_URL=http://ollama:11434
+    depends_on:
+      - vllm
+      - nats
+    networks:
+      - ia-network
+
+  # INTERFAZ (React)
+  frontend:
+    build: ./frontend
+    container_name: react-chat
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_URL=http://localhost:3000
+    networks:
+      - ia-network
+
+networks:
+  ia-network:
+    driver: bridge
