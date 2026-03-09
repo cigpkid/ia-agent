@@ -137,6 +137,7 @@ Reglas obligatorias:
 8. Si una unidad no existe o no hay resultados, indícalo claramente sin inventar causas.
 9. Si hay información parcial, repórtala como parcial.
 10. No preguntes si deseas generar diagnóstico cuando ya exista una condición crítica; debes hacerlo directamente.
+11. Puedes consultar unidades por ID interno, por placa, por IMEI o por nombre de unidad.
 `,
           },
         ]);

@@ -4,14 +4,13 @@ import {
   Column,
   OneToMany,
   OneToOne,
-  JoinColumn
+  JoinColumn,
 } from 'typeorm';
 import { UnidadDispositivo } from './unidad-dispositivo.entity';
 import { UltimaPosicion } from './ultima-posicion.entity';
 
 @Entity('dat_Unidad')
 export class Unidad {
-
   @PrimaryGeneratedColumn({ name: 'n_unidad_id' })
   id: number;
 
@@ -42,14 +41,17 @@ export class Unidad {
   @Column({ name: 'c_unidad_placa' })
   placa: string;
 
+  @Column({ name: 'c_unidad_vin' })
+  c_unidad_vin: string;
+
   @Column({ name: 'd_unidad_fechainstalacion', nullable: true })
   fechaInstalacion: Date;
 
   // 🔹 Relaciones
 
-  @OneToMany(() => UnidadDispositivo, ud => ud.unidad)
+  @OneToMany(() => UnidadDispositivo, (ud) => ud.unidad)
   dispositivosRelacion: UnidadDispositivo[];
 
-  @OneToOne(() => UltimaPosicion, up => up.unidad)
+  @OneToOne(() => UltimaPosicion, (up) => up.unidad)
   ultimaPosicion: UltimaPosicion;
 }

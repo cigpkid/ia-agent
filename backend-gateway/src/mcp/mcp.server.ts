@@ -10,9 +10,7 @@ import { AvlService } from 'src/avl/avl.service';
 export class McpServerInstance {
   private server: Server;
 
-  constructor(
-    private readonly avlService: AvlService,
-  ) {
+  constructor(private readonly avlService: AvlService) {
     this.server = new Server(
       {
         name: 'nest-universal-mcp-server',
@@ -62,6 +60,34 @@ Debe usarse para:
                 description: 'IDs internos de las unidades',
                 items: { type: 'number' },
               },
+              vins: {
+                type: 'array',
+                description: 'VIN del vehículo (17 caracteres)',
+                items: {
+                  type: 'string',
+                  pattern: '^[A-HJ-NPR-Z0-9]{17}$',
+                },
+              },
+              busqueda_parcial_nombre: {
+                type: 'boolean',
+                description:
+                  'Permite buscar coincidencias parciales por nombre de unidad',
+              },
+              busqueda_parcial_placa: {
+                type: 'boolean',
+                description: 'Permite buscar coincidencias parciales por placa',
+              },
+              unidad_nombres: {
+                type: 'array',
+                minItems: 1,
+                maxItems: 50,
+                description: 'Nombres de las unidades',
+                items: {
+                  type: 'string',
+                  minLength: 1,
+                  maxLength: 120,
+                },
+              },
               imeis: {
                 type: 'array',
                 minItems: 1,
@@ -79,7 +105,7 @@ Debe usarse para:
                 description: 'Placas vehiculares',
                 items: {
                   type: 'string',
-                  pattern: '^[A-Z0-9-]{5,10}$',
+                  pattern: '^[A-Z0-9-]{5,15}$',
                 },
               },
               solo_suspendidas: {
@@ -94,13 +120,8 @@ Debe usarse para:
               },
               solo_mas_reciente: {
                 type: 'boolean',
-                description: `
-Usar TRUE cuando el usuario solicite:
-- unidades más recientes
-- últimas en reportar
-- últimas comunicaciones
-- actividad reciente
-`,
+                description:
+                  'Usar true cuando el usuario pida las más recientes',
               },
             },
           },
@@ -175,6 +196,8 @@ Debe usarse cuando:
       if (request.params.name === 'consultar_unidades_tecnicas') {
         const {
           unidad_ids,
+          vins,
+          unidad_nombres,
           imeis,
           placas,
           solo_suspendidas,
@@ -193,6 +216,8 @@ Debe usarse cuando:
 
         const result = await this.avlService.obtenerUnidadesNoc({
           unidad_ids,
+          vins,
+          unidad_nombres,
           imeis,
           placas,
           solo_suspendidas,
@@ -216,6 +241,7 @@ Debe usarse cuando:
                 unidades: hayResultados
                   ? result.unidades.map((u: any) => ({
                       unidad_id: u.unidad_id,
+                      vin: u.vins,
                       unidad_nombre: u.unidad_nombre,
                       placa: u.placa,
                       suspendida: u.suspendida,
@@ -279,12 +305,10 @@ Debe usarse cuando:
             'Monitorear comportamiento, validar señal y revisar dispositivo si persiste.';
           prioridad = 2;
           requiere_intervencion_humana = false;
-        } else if (
-          estatus_unidad === 0 ||
-          estatus_dispositivo === 0
-        ) {
+        } else if (estatus_unidad === 0 || estatus_dispositivo === 0) {
           severidad = 'WARNING';
-          causa_probable = 'Estatus operativo irregular en unidad o dispositivo.';
+          causa_probable =
+            'Estatus operativo irregular en unidad o dispositivo.';
           accion_recomendada =
             'Validar estado operativo de unidad y dispositivo.';
           prioridad = 2;

@@ -1,8 +1,20 @@
-// src/unidades/unidades.service.ts
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, Brackets, SelectQueryBuilder } from 'typeorm';
 import { Unidad } from './entities/unidad.entity';
+
+type ObtenerUnidadesNocFiltros = {
+  unidad_ids?: number[];
+  unidad_nombres?: string[];
+  imeis?: string[];
+  placas?: string[];
+  vins?: string[];
+  solo_suspendidas?: boolean;
+  horas_sin_comunicacion?: number;
+  solo_mas_reciente?: boolean;
+  busqueda_parcial_nombre?: boolean;
+  busqueda_parcial_placa?: boolean;
+};
 
 @Injectable()
 export class AvlService {
@@ -11,24 +23,137 @@ export class AvlService {
     private readonly unidadRepo: Repository<Unidad>,
   ) {}
 
-  async obtenerUnidadesNoc(filtros: {
-    unidad_ids?: number[];
-    imeis?: string[];
-    placas?: string[];
-    solo_suspendidas?: boolean;
-    horas_sin_comunicacion?: number;
-    solo_mas_reciente?: boolean;
-  }) {
+  async obtenerUnidadesNoc(filtros: ObtenerUnidadesNocFiltros) {
     const {
       unidad_ids,
+      unidad_nombres,
       imeis,
       placas,
+      vins,
       solo_suspendidas,
       horas_sin_comunicacion,
       solo_mas_reciente,
+      busqueda_parcial_nombre,
+      busqueda_parcial_placa,
     } = filtros;
 
-    const query = this.unidadRepo
+    // =========================
+    // 1. BÚSQUEDA PRINCIPAL
+    // =========================
+    const query = this.buildBaseQuery();
+
+    this.applyCommonFilters(query, {
+      unidad_ids,
+      unidad_nombres,
+      imeis,
+      placas,
+      vins,
+      solo_suspendidas,
+      horas_sin_comunicacion,
+      solo_mas_reciente,
+      busqueda_parcial_nombre: !!busqueda_parcial_nombre,
+      busqueda_parcial_placa: !!busqueda_parcial_placa,
+    });
+
+    const unidades = await query.getRawMany();
+
+    // =========================
+    // 2. FALLBACK AUTOMÁTICO POR NOMBRE
+    // =========================
+    if (
+      unidades.length === 0 &&
+      unidad_nombres?.length &&
+      !busqueda_parcial_nombre
+    ) {
+      const retryByName = this.buildBaseQuery();
+
+      this.applyCommonFilters(retryByName, {
+        unidad_ids,
+        unidad_nombres,
+        imeis,
+        placas,
+        vins,
+        solo_suspendidas,
+        horas_sin_comunicacion,
+        solo_mas_reciente,
+        busqueda_parcial_nombre: true,
+        busqueda_parcial_placa: !!busqueda_parcial_placa,
+      });
+
+      const retryResults = await retryByName.getRawMany();
+
+      return {
+        total_solicitadas: this.countSolicitadas({
+          unidad_ids,
+          unidad_nombres,
+          imeis,
+          placas,
+          vins,
+        }),
+        total_encontradas: retryResults.length,
+        estrategia_busqueda: 'fallback_like_nombre',
+        unidades: retryResults,
+      };
+    }
+
+    // =========================
+    // 3. FALLBACK AUTOMÁTICO POR PLACA
+    // =========================
+    if (
+      unidades.length === 0 &&
+      placas?.length &&
+      !busqueda_parcial_placa
+    ) {
+      const retryByPlaca = this.buildBaseQuery();
+
+      this.applyCommonFilters(retryByPlaca, {
+        unidad_ids,
+        unidad_nombres,
+        imeis,
+        placas,
+        vins,
+        solo_suspendidas,
+        horas_sin_comunicacion,
+        solo_mas_reciente,
+        busqueda_parcial_nombre: !!busqueda_parcial_nombre,
+        busqueda_parcial_placa: true,
+      });
+
+      const retryResults = await retryByPlaca.getRawMany();
+
+      return {
+        total_solicitadas: this.countSolicitadas({
+          unidad_ids,
+          unidad_nombres,
+          imeis,
+          placas,
+          vins,
+        }),
+        total_encontradas: retryResults.length,
+        estrategia_busqueda: 'fallback_like_placa',
+        unidades: retryResults,
+      };
+    }
+
+    // =========================
+    // 4. RESPUESTA NORMAL
+    // =========================
+    return {
+      total_solicitadas: this.countSolicitadas({
+        unidad_ids,
+        unidad_nombres,
+        imeis,
+        placas,
+        vins,
+      }),
+      total_encontradas: unidades.length,
+      estrategia_busqueda: 'exacta',
+      unidades,
+    };
+  }
+
+  private buildBaseQuery(): SelectQueryBuilder<Unidad> {
+    return this.unidadRepo
       .createQueryBuilder('u')
       .leftJoin('u.ultimaPosicion', 'up')
       .leftJoin('u.dispositivosRelacion', 'ud')
@@ -37,6 +162,7 @@ export class AvlService {
         'u.n_unidad_id AS unidad_id',
         'u.c_unidad_nombre AS unidad_nombre',
         'u.c_unidad_placa AS placa',
+        'u.c_unidad_vin AS vin',
         'u.b_unidad_suspendida AS suspendida',
         'd.c_dispositivo_imei AS imei',
         'up.d_ultimaposicion_fechaequipo AS ultima_fecha',
@@ -48,29 +174,98 @@ export class AvlService {
         ) AS horas_sin_comunicacion
         `,
       ]);
+  }
 
-    /* =========================
-       FILTROS
-       ========================= */
+  private applyCommonFilters(
+    query: SelectQueryBuilder<Unidad>,
+    filtros: ObtenerUnidadesNocFiltros,
+  ) {
+    const {
+      unidad_ids,
+      unidad_nombres,
+      imeis,
+      placas,
+      vins,
+      solo_suspendidas,
+      horas_sin_comunicacion,
+      solo_mas_reciente,
+      busqueda_parcial_nombre,
+      busqueda_parcial_placa,
+    } = filtros;
 
+    // =========================
+    // FILTRO POR ID
+    // =========================
     if (unidad_ids?.length) {
       query.andWhere('u.n_unidad_id IN (:...unidadIds)', {
         unidadIds: unidad_ids,
       });
     }
 
+    // =========================
+    // FILTRO POR NOMBRE
+    // =========================
+    if (unidad_nombres?.length) {
+      if (busqueda_parcial_nombre) {
+        query.andWhere(
+          new Brackets((qb) => {
+            unidad_nombres.forEach((nombre, index) => {
+              qb.orWhere(`u.c_unidad_nombre LIKE :unidadNombre${index}`, {
+                [`unidadNombre${index}`]: `%${nombre}%`,
+              });
+            });
+          }),
+        );
+      } else {
+        query.andWhere('u.c_unidad_nombre IN (:...unidadNombres)', {
+          unidadNombres: unidad_nombres,
+        });
+      }
+    }
+
+    // =========================
+    // FILTRO POR IMEI
+    // =========================
     if (imeis?.length) {
       query.andWhere('d.c_dispositivo_imei IN (:...imeis)', { imeis });
     }
 
+    // =========================
+    // FILTRO POR PLACA
+    // =========================
     if (placas?.length) {
-      query.andWhere('u.c_unidad_placa IN (:...placas)', { placas });
+      if (busqueda_parcial_placa) {
+        query.andWhere(
+          new Brackets((qb) => {
+            placas.forEach((placa, index) => {
+              qb.orWhere(`u.c_unidad_placa LIKE :placa${index}`, {
+                [`placa${index}`]: `%${placa}%`,
+              });
+            });
+          }),
+        );
+      } else {
+        query.andWhere('u.c_unidad_placa IN (:...placas)', { placas });
+      }
     }
 
+    // =========================
+    // FILTRO POR VIN
+    // =========================
+    if (vins?.length) {
+      query.andWhere('u.c_unidad_vin IN (:...vins)', { vins });
+    }
+
+    // =========================
+    // FILTRO SOLO SUSPENDIDAS
+    // =========================
     if (solo_suspendidas === true) {
-      query.andWhere('u.b_unidad_suspendida = 1');
+      query.andWhere("u.b_unidad_suspendida = '1'");
     }
 
+    // =========================
+    // FILTRO HORAS SIN COMUNICACIÓN
+    // =========================
     if (horas_sin_comunicacion) {
       query.andWhere(
         `
@@ -85,59 +280,30 @@ export class AvlService {
       );
     }
 
-    /* =========================
-       MÁS RECIENTE (POR UNIDAD)
-       ========================= */
-
+    // =========================
+    // SOLO MÁS RECIENTE
+    // =========================
     if (solo_mas_reciente === true) {
-      query.andWhere(`
-        up.d_ultimaposicion_fechaequipo = (
-          SELECT MAX(up2.d_ultimaposicion_fechaequipo)
-          FROM dat_UltimaPosicion up2
-          WHERE up2.n_unidad_id = u.n_unidad_id
-        )
-      `);
+      query
+        .andWhere('up.d_ultimaposicion_fechaequipo IS NOT NULL')
+        .orderBy('up.d_ultimaposicion_fechaequipo', 'DESC')
+        .limit(5);
     }
+  }
 
-    /* =========================
-       EJECUCIÓN
-       ========================= */
-
-const [sql, params] = query.getQueryAndParameters();
-console.log('SQL:', sql);
-console.log('PARAMS:', params);
-    const rows = await query.getRawMany();
-
-    /* =========================
-       NORMALIZACIÓN NOC
-       ========================= */
-
-    const unidadesMap = new Map<number, any>();
-
-    for (const row of rows) {
-      if (!unidadesMap.has(row.unidad_id)) {
-        unidadesMap.set(row.unidad_id, {
-          unidad_id: row.unidad_id,
-          unidad_nombre: row.unidad_nombre,
-          placa: row.placa,
-          suspendida: row.suspendida,
-          imei: row.imei,
-          ultima_fecha: row.ultima_fecha,
-          horas_sin_comunicacion: row.horas_sin_comunicacion,
-        });
-      }
-    }
-
-    const unidades = Array.from(unidadesMap.values());
-
-    return {
-      total_solicitadas:
-        unidad_ids?.length ??
-        imeis?.length ??
-        placas?.length ??
-        0,
-      total_encontradas: unidades.length,
-      unidades,
-    };
+  private countSolicitadas(filtros: {
+    unidad_ids?: number[];
+    unidad_nombres?: string[];
+    imeis?: string[];
+    placas?: string[];
+    vins?: string[];
+  }): number {
+    return (
+      (filtros.unidad_ids?.length || 0) +
+      (filtros.unidad_nombres?.length || 0) +
+      (filtros.imeis?.length || 0) +
+      (filtros.placas?.length || 0) +
+      (filtros.vins?.length || 0)
+    );
   }
 }
