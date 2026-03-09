@@ -6,6 +6,6 @@ import { VectorService } from './vector.service';
 
 @Module({
   providers: [LlmService, LlmParser, SummaryService,VectorService],
-  exports: [LlmService],
+  exports: [LlmService,VectorService,SummaryService],
 })
 export class LlmModule {}

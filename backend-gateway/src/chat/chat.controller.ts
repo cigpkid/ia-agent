@@ -2,18 +2,11 @@ import {
   Controller,
   Post,
   Body,
-  HttpException,
-  HttpStatus,
   Get,
   Param,
   Delete,
 } from '@nestjs/common';
 import { ChatService } from './chat.service';
-
-// Definimos una interfaz sencilla para validar la entrada
-interface ChatRequest {
-  prompt: string;
-}
 
 @Controller('chat')
 export class ChatController {
@@ -49,29 +42,9 @@ export class ChatController {
       body.image,
     );
   }
-  /*@Post('process')
-  async processMessage(@Body() body: ChatRequest) {
-    // 1. Validación básica del input
-    if (!body.prompt || body.prompt.trim() === '') {
-      throw new HttpException('El prompt es requerido', HttpStatus.BAD_REQUEST);
-    }
 
-    try {
-      const result = await this.chatService.processMessage(body.prompt);
-      
-      return {
-        status: 'success',
-        response: result.response,
-        // Eliminamos toolUsed o lo dejamos como null si tu frontend lo espera
-        toolUsed: null, 
-      };    
-    } catch (error) {
-      console.error('Error en el Orquestador de IA:', error);
-      
-      throw new HttpException(
-        'Error procesando la solicitud con la IA',
-        HttpStatus.INTERNAL_SERVER_ERROR,
-      );
-    }
-  }*/
+  @Get('sessions/:userId')
+  async getSessions(@Param('userId') userId: string) {
+    return this.chatService.getSessionsByUser(userId);
+  }
 }

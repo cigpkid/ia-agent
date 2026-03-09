@@ -1,21 +1,29 @@
-import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  CreateDateColumn,
+} from 'typeorm';
 
 @Entity('messages')
 export class MessageEntity {
-  @PrimaryGeneratedColumn()
-  id: number;
-
-  @Column()
-  sessionId: string;
+  @PrimaryGeneratedColumn('uuid')
+  id: string;
 
   @Column()
   userId: string;
 
   @Column()
-  role: string; // 'user', 'assistant', 'system'
+  sessionId: string;
 
-  @Column('text')
+  @Column()
+  role: string;
+
+  @Column({ type: 'longtext' })
   content: string;
+
+  @Column({ type: 'longtext', nullable: true })
+  uiPayload?: string | null;
 
   @CreateDateColumn()
   createdAt: Date;

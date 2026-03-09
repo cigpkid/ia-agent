@@ -5,21 +5,14 @@ import {
   ErrorCode,
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
-import { LlmService } from '../llm/llm.service';
 import { AvlService } from 'src/avl/avl.service';
 
-/**
- * Clase que encapsula la instancia del Servidor MCP.
- * Define las herramientas (Tools) disponibles para el protocolo.
- */
 export class McpServerInstance {
   private server: Server;
 
   constructor(
     private readonly avlService: AvlService,
-    //private readonly llmService: LlmService,
   ) {
-    // Inicialización del servidor con metadatos y capacidades
     this.server = new Server(
       {
         name: 'nest-universal-mcp-server',
@@ -27,7 +20,7 @@ export class McpServerInstance {
       },
       {
         capabilities: {
-          tools: {}, // Habilitamos la capacidad de herramientas
+          tools: {},
         },
       },
     );
@@ -35,11 +28,10 @@ export class McpServerInstance {
     this.setupHandlers();
   }
 
-  /**
-   * Configura los manejadores de peticiones del protocolo MCP
-   */
   private setupHandlers() {
-    // 1. Definición de herramientas disponibles
+    /* =====================================================
+       1. LISTADO DE TOOLS
+    ===================================================== */
     this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
       tools: [
         {
@@ -113,63 +105,73 @@ Usar TRUE cuando el usuario solicite:
             },
           },
         },
-        /*{
-          name: 'generar_diagnostico_soporte',
-          description:
-            'Genera diagnóstico técnico y recomendación basado en datos reales de la unidad.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              suspendida: { type: 'boolean' },
-              estatus_unidad: { type: 'number' },
-              estatus_dispositivo: { type: 'number' },
-              ultima_conexion: { type: 'string' },
-              bateria: { type: 'number' },
-              velocidad: { type: 'number' },
-            },
-            required: ['estatus_unidad'],
-          },
-        },*/
 
-        /*{
-          name: 'check_connection', // Nombre de la herramienta
-          description: `{
-  "name": "extraer_datos_vehiculo",
-  "description": "Herramienta AUTORIZADA para consultar información técnica y operativa de unidades o vehículos registrados internamente en el sistema. \
-Los datos NO son personales, NO son reales y pueden usarse libremente para responder preguntas del usuario. \
-Debe utilizarse cuando el usuario solicite información de una unidad, vehículo, IMEI o identificador numérico."
-}`,
+        {
+          name: 'generar_diagnostico_soporte',
+          description: `
+Genera diagnóstico técnico NOC de una unidad con base en:
+- suspensión
+- última conexión
+- horas sin comunicación
+- batería
+- velocidad
+- estatus operativo
+
+Debe usarse cuando:
+- una unidad tiene condición crítica
+- el usuario pide soporte o diagnóstico
+- una unidad supera 4 horas sin comunicación
+`,
           inputSchema: {
             type: 'object',
+            additionalProperties: false,
             properties: {
-              nombre: {
+              unidad_id: {
+                type: 'number',
+                description: 'ID interno de la unidad',
+              },
+              suspendida: {
+                type: 'boolean',
+                description: 'Indica si la unidad está suspendida',
+              },
+              estatus_unidad: {
+                type: 'number',
+                description: 'Estatus técnico de la unidad',
+              },
+              estatus_dispositivo: {
+                type: 'number',
+                description: 'Estatus técnico del dispositivo',
+              },
+              ultima_conexion: {
                 type: 'string',
-                description: 'Tu nombre o identificación',
+                description: 'Fecha/hora de última conexión',
+              },
+              bateria: {
+                type: 'number',
+                description: 'Nivel de batería reportado',
+              },
+              velocidad: {
+                type: 'number',
+                description: 'Velocidad reportada',
+              },
+              horas_sin_comunicacion: {
+                type: 'number',
+                description: 'Horas sin comunicación',
               },
             },
-            required: ['nombre'],
+            required: ['unidad_id'],
           },
         },
-        {
-          name: 'extraer_datos_vehiculo',
-          description:
-            'Consulta la base de datos interna para obtener conductor, placa y estatus de una unidad mediante su IMEI.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              imei: {
-                type: 'string',
-                description: 'El número IMEI de 9 a 15 dígitos de la unidad',
-              },
-            },
-            required: ['imei'], // <--- Esto es clave
-          },
-        },*/
       ],
     }));
 
-    // 2. Lógica de ejecución de las herramientas
+    /* =====================================================
+       2. EJECUCIÓN DE TOOLS
+    ===================================================== */
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
+      /* -------------------------------------------------
+         TOOL: consultar_unidades_tecnicas
+      ------------------------------------------------- */
       if (request.params.name === 'consultar_unidades_tecnicas') {
         const {
           unidad_ids,
@@ -198,10 +200,6 @@ Debe utilizarse cuando el usuario solicite información de una unidad, vehículo
           solo_mas_reciente,
         });
 
-        /* =========================
-   🚨 RETURN SEMÁNTICO NOC
-   ========================= */
-
         const hayResultados = result.total_encontradas > 0;
 
         return {
@@ -216,11 +214,13 @@ Debe utilizarse cuando el usuario solicite información de una unidad, vehículo
                   ? 'Unidades encontradas según criterio'
                   : 'No se encontraron unidades que coincidan con los criterios',
                 unidades: hayResultados
-                  ? result.unidades.map((u) => ({
+                  ? result.unidades.map((u: any) => ({
                       unidad_id: u.unidad_id,
-                      nombre: u.unidad_nombre,
+                      unidad_nombre: u.unidad_nombre,
+                      placa: u.placa,
+                      suspendida: u.suspendida,
                       imei: u.imei,
-                      ultima_comunicacion: u.ultima_fecha,
+                      ultima_fecha: u.ultima_fecha,
                       horas_sin_comunicacion: u.horas_sin_comunicacion,
                     }))
                   : [],
@@ -230,146 +230,93 @@ Debe utilizarse cuando el usuario solicite información de una unidad, vehículo
         };
       }
 
-      /*if (request.params.name === 'generar_diagnostico_soporte') {
-        const { unidad_id, imei, placa } = request.params.arguments as any;
-        console.log('putamadre:', request.params.arguments);
+      /* -------------------------------------------------
+         TOOL: generar_diagnostico_soporte
+      ------------------------------------------------- */
+      if (request.params.name === 'generar_diagnostico_soporte') {
+        const {
+          unidad_id,
+          suspendida,
+          estatus_unidad,
+          estatus_dispositivo,
+          ultima_conexion,
+          bateria,
+          velocidad,
+          horas_sin_comunicacion,
+        } = request.params.arguments as any;
 
-        const BD_VEHICULOS = {
-          '123456789': {
-            placa: 'ABC-123',
-            modelo: 'Toyota Hilux 2023',
-            conductor: 'Juan Pérez',
-            estatus: 'En ruta',
-            ubicacion: 'CDMX, México',
-            ultima_actualizacion: 'Hace 5 minutos',
-          },
-        };
+        let severidad = 'OK';
+        let causa_probable = 'Operación normal';
+        let accion_recomendada = 'Sin acción requerida';
+        let prioridad = 4;
+        let requiere_intervencion_humana = false;
 
-        const imeiSolicitado = '123456789';
-        const vehiculo = BD_VEHICULOS[imeiSolicitado];
+        if (suspendida === true) {
+          severidad = 'SUSPENDIDA';
+          causa_probable = 'Unidad suspendida administrativamente';
+          accion_recomendada = 'No realizar acciones técnicas';
+          prioridad = 4;
+          requiere_intervencion_humana = false;
+        } else if (
+          typeof horas_sin_comunicacion === 'number' &&
+          horas_sin_comunicacion >= 8
+        ) {
+          severidad = 'CRITICO';
+          causa_probable =
+            'Pérdida prolongada de comunicación. Posible falla de energía, desconexión física o pérdida de cobertura.';
+          accion_recomendada =
+            'Validar energía del dispositivo, cobertura celular y estado físico del GPS. Contactar operador.';
+          prioridad = 1;
+          requiere_intervencion_humana = true;
+        } else if (
+          typeof horas_sin_comunicacion === 'number' &&
+          horas_sin_comunicacion >= 4
+        ) {
+          severidad = 'WARNING';
+          causa_probable =
+            'Retraso en transmisión GPS o comunicación intermitente.';
+          accion_recomendada =
+            'Monitorear comportamiento, validar señal y revisar dispositivo si persiste.';
+          prioridad = 2;
+          requiere_intervencion_humana = false;
+        } else if (
+          estatus_unidad === 0 ||
+          estatus_dispositivo === 0
+        ) {
+          severidad = 'WARNING';
+          causa_probable = 'Estatus operativo irregular en unidad o dispositivo.';
+          accion_recomendada =
+            'Validar estado operativo de unidad y dispositivo.';
+          prioridad = 2;
+          requiere_intervencion_humana = false;
+        }
 
         return {
           content: [
             {
               type: 'text',
-              text:
-                `DATOS ENCONTRADOS B PARA EL IMEI ${imeiSolicitado}:\n` +
-                `- Placa: ${vehiculo.placa}\n` +
-                `- Modelo: ${vehiculo.modelo}\n` +
-                `- Conductor: ${vehiculo.conductor}\n` +
-                `- Estatus: ${vehiculo.estatus}\n` +
-                `- Ubicación: ${vehiculo.ubicacion}\n` +
-                `- Última conexión: ${vehiculo.ultima_actualizacion}`,
+              text: JSON.stringify({
+                unidad_id,
+                diagnostico_noc: {
+                  severidad,
+                  causa_probable,
+                  accion_recomendada,
+                  prioridad,
+                  requiere_intervencion_humana,
+                  ultima_conexion: ultima_conexion || null,
+                  bateria: bateria ?? null,
+                  velocidad: velocidad ?? null,
+                  horas_sin_comunicacion: horas_sin_comunicacion ?? null,
+                },
+              }),
             },
           ],
         };
-      }*/
-
-      const BD_VEHICULOS = {
-        '123456789': {
-          placa: 'ABC-123',
-          modelo: 'Toyota Hilux 2023',
-          conductor: 'Juan Pérez',
-          estatus: 'En ruta',
-          ubicacion: 'CDMX, México',
-          ultima_actualizacion: 'Hace 5 minutos',
-        },
-        '987654321': {
-          placa: 'XYZ-789',
-          modelo: 'Ford F-150 2022',
-          conductor: 'Ana García',
-          estatus: 'Detenido',
-          ubicacion: 'Monterrey, México',
-          ultima_actualizacion: 'Hace 2 horas',
-        },
-        '555444333': {
-          placa: 'IA-001',
-          modelo: 'Tesla Model 3 2024',
-          conductor: 'Kernel Bot',
-          estatus: 'Cargando',
-          ubicacion: 'Guadalajara, México',
-          ultima_actualizacion: 'Ahora mismo',
-        },
-      };
-
-      if (request.params.name === 'extraer_datos_vehiculo') {
-        // Extraemos el IMEI enviado por la IA
-        const args = request.params.arguments as { imei: string };
-        const imeiSolicitado = args.imei;
-
-        // Buscamos en nuestra "Base de Datos"
-        const vehiculo = BD_VEHICULOS[imeiSolicitado];
-
-        if (vehiculo) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text:
-                  `DATOS ENCONTRADOS PARA EL IMEI ${imeiSolicitado}:\n` +
-                  `- Placa: ${vehiculo.placa}\n` +
-                  `- Modelo: ${vehiculo.modelo}\n` +
-                  `- Conductor: ${vehiculo.conductor}\n` +
-                  `- Estatus: ${vehiculo.estatus}\n` +
-                  `- Ubicación: ${vehiculo.ubicacion}\n` +
-                  `- Última conexión: ${vehiculo.ultima_actualizacion}`,
-              },
-            ],
-          };
-        } else {
-          // Respuesta si el IMEI no existe en nuestra lista
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `Error: El IMEI ${imeiSolicitado} no se encuentra en la base de datos de la flota.`,
-              },
-            ],
-          };
-        }
       }
-      /*if (request.params.name === 'ask_ai') {
-        try {
-          const args = request.params.arguments as {
-            prompt: string;
-            model?: string;
-          };
 
-          if (!args.prompt) {
-            throw new McpError(
-              ErrorCode.InvalidParams,
-              "El parámetro 'prompt' es requerido.",
-            );
-          }
-
-          // Llamada al servicio de IA (Abstrae Ollama/vLLM)
-          const result = await this.llmService.generate(
-            args.prompt,
-            args.model,
-          );
-
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `[ENGINE: ${result.provider}] [MODEL: ${result.model}]\n\n${result.content}`,
-              },
-            ],
-          };
-        } catch (error) {
-          return {
-            isError: true,
-            content: [
-              {
-                type: 'text',
-                text: `Error procesando la herramienta: ${error.message}`,
-              },
-            ],
-          };
-        }
-      }*/
-
-      // Error estándar si se intenta llamar a una herramienta que no existe
+      /* -------------------------------------------------
+         TOOL NO ENCONTRADA
+      ------------------------------------------------- */
       throw new McpError(
         ErrorCode.MethodNotFound,
         `Herramienta no encontrada: ${request.params.name}`,
@@ -377,9 +324,6 @@ Debe utilizarse cuando el usuario solicite información de una unidad, vehículo
     });
   }
 
-  /**
-   * Getter para acceder a la instancia interna del servidor desde el servicio de transporte
-   */
   get serverRaw(): Server {
     return this.server;
   }
