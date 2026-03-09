@@ -124,7 +124,7 @@ export class ChatService implements OnModuleInit {
             content: `
 Eres un agente NOC de monitoreo GPS especializado en soporte técnico y operación de flota.
 
-Tu trabajo es responder con base en datos reales obtenidos de herramientas MCP. Nunca inventes información, identificadores, placas, IMEIs, estados ni diagnósticos.
+Tu trabajo es responder con base en datos reales obtenidos de herramientas MCP. Nunca inventes información, identificadores, placas, IMEIs, VIN, estados ni diagnósticos.
 
 Reglas obligatorias:
 1. Usa consultar_unidades_tecnicas para obtener datos reales de unidades.
@@ -137,7 +137,11 @@ Reglas obligatorias:
 8. Si una unidad no existe o no hay resultados, indícalo claramente sin inventar causas.
 9. Si hay información parcial, repórtala como parcial.
 10. No preguntes si deseas generar diagnóstico cuando ya exista una condición crítica; debes hacerlo directamente.
-11. Puedes consultar unidades por ID interno, por placa, por IMEI o por nombre de unidad.
+11. Puedes consultar unidades por ID interno, por placa, por IMEI, por VIN o por nombre de unidad.
+12. Nunca escribas JSON, name, parameters, arguments ni llamadas simuladas a herramientas en el texto visible al usuario.
+13. Las herramientas solo se ejecutan mediante tool calling interno.
+14. Si no tienes certeza de un identificador, usa únicamente lo extraído del prompt o del contexto confirmado por herramientas.
+15. No repitas payloads internos ni resultados crudos de herramientas al usuario.
 `,
           },
         ]);
@@ -160,8 +164,10 @@ Reglas obligatorias:
       sessionId,
     );
 
+    const requestHistory = [...currentHistory];
+
     if (memory) {
-      currentHistory.push({
+      requestHistory.push({
         role: 'system',
         content: `Contexto relevante recuperado de memoria:\n${memory}`,
       });
@@ -175,12 +181,13 @@ Reglas obligatorias:
     });
 
     if (agentContext?.systemHints?.length) {
-      const systemMsg = currentHistory.find((m) => m.role === 'system');
-      if (systemMsg) {
-        systemMsg.content += '\n' + agentContext.systemHints.join('\n');
-      }
+      requestHistory.push({
+        role: 'system',
+        content: agentContext.systemHints.join('\n'),
+      });
     }
 
+    requestHistory.push({ role: 'user', content: prompt });
     currentHistory.push({ role: 'user', content: prompt });
 
     const { tools } = await this.mcpClient.listTools();
@@ -197,38 +204,43 @@ Reglas obligatorias:
     let iterations = 0;
     let finalResponseText = '';
     const executedToolPayloads: any[] = [];
+    let workingHistory = [...requestHistory];
 
     while (iterations < 5) {
       iterations++;
 
-      const result = await this.llmService.chatStream(
-        currentHistory,
-        mcpTools,
-        (chunk) => onChunk && onChunk(chunk),
-      );
+      const result = await this.llmService.chat(workingHistory, mcpTools);
 
       if (!result.toolCalls || result.toolCalls.length === 0) {
-        finalResponseText = result.content;
+        finalResponseText = result.content || '';
         break;
       }
 
+      workingHistory.push({
+        role: 'assistant',
+        content: null,
+        tool_calls: result.toolCalls,
+      });
+
       currentHistory.push({
         role: 'assistant',
-        content: result.content || null,
+        content: null,
         tool_calls: result.toolCalls,
       });
 
       for (const call of result.toolCalls) {
         const toolCall = call as any;
-        const toolName = toolCall.function.name;
+        const toolName = toolCall?.function?.name;
+
+        if (!toolName) continue;
 
         if (onToolCall) onToolCall(toolName);
 
         try {
           const rawArgs =
             typeof toolCall.function.arguments === 'string'
-              ? JSON.parse(toolCall.function.arguments)
-              : toolCall.function.arguments;
+              ? JSON.parse(toolCall.function.arguments || '{}')
+              : (toolCall.function.arguments ?? {});
 
           const args = await this.agentService.normalizeToolArgs({
             toolName,
@@ -251,12 +263,15 @@ Reglas obligatorias:
             toolResult,
           });
 
-          currentHistory.push({
+          const toolMessage = {
             role: 'tool',
             tool_call_id: toolCall.id || `call_${Date.now()}`,
             name: toolName,
             content: JSON.stringify(toolResult.content),
-          });
+          };
+
+          workingHistory.push(toolMessage);
+          currentHistory.push(toolMessage);
 
           const nextActions = await this.plannerService.getNextActions({
             prompt,
@@ -283,37 +298,55 @@ Reglas obligatorias:
                 toolResult: plannedToolResult,
               });
 
-              currentHistory.push({
+              const plannedToolMessage = {
                 role: 'tool',
                 tool_call_id: `planned_${Date.now()}_${action.name}`,
                 name: action.name,
                 content: JSON.stringify(plannedToolResult.content),
-              });
+              };
+
+              workingHistory.push(plannedToolMessage);
+              currentHistory.push(plannedToolMessage);
             } catch (plannerError) {
               this.logger.error(
                 `Error ejecutando acción planeada ${action.name}`,
                 plannerError,
               );
 
-              currentHistory.push({
+              const plannedErrorMessage = {
                 role: 'tool',
-                tool_call_id: `planned_error_${Date.now()}`,
+                tool_call_id: `planned_error_${Date.now()}_${action.name}`,
                 name: action.name,
                 content: 'Error en tool planeada',
-              });
+              };
+
+              workingHistory.push(plannedErrorMessage);
+              currentHistory.push(plannedErrorMessage);
             }
           }
         } catch (error) {
-          this.logger.error('Error ejecutando tool', error);
+          this.logger.error(`Error ejecutando tool ${toolName}`, error);
 
-          currentHistory.push({
+          const toolErrorMessage = {
             role: 'tool',
-            tool_call_id: toolCall.id,
+            tool_call_id: toolCall.id || `tool_error_${Date.now()}`,
             name: toolName,
             content: 'Error en tool',
-          });
+          };
+
+          workingHistory.push(toolErrorMessage);
+          currentHistory.push(toolErrorMessage);
         }
       }
+    }
+
+    if (!finalResponseText) {
+      const finalResult = await this.llmService.chatStreamFinal(
+        workingHistory,
+        (chunk) => onChunk && onChunk(chunk),
+      );
+
+      finalResponseText = finalResult.content || '';
     }
 
     const formatted = this.responseFormatter.formatNocResponse({
@@ -327,6 +360,11 @@ Reglas obligatorias:
       role: 'assistant',
       content: formatted.text,
       uiPayload: formatted.ui ? JSON.stringify(formatted.ui) : null,
+    });
+
+    currentHistory.push({
+      role: 'assistant',
+      content: formatted.text,
     });
 
     this.manageBackgroundMemory(userId, sessionId, currentHistory).catch((e) =>
@@ -372,7 +410,7 @@ Reglas obligatorias:
       this.messageCounters.delete(sessionId);
 
       return { deleted: true, sessionId };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(
         `Error eliminando sesión ${sessionId}: ${error.message}`,
       );

@@ -8,46 +8,39 @@ import llmConfig from '../config/llm.config';
 export class SummaryService {
   constructor(
     private readonly llmService: LlmService,
-    @Inject(llmConfig.KEY) 
-    private readonly configValue: ConfigType<typeof llmConfig>
+    @Inject(llmConfig.KEY)
+    private readonly configValue: ConfigType<typeof llmConfig>,
   ) {}
 
-  async generateProgressiveSummary(history: any[], currentSummary: string) {
-    const promptText = `
-      RESUMEN ACTUAL: "${currentSummary || 'No hay resumen previo'}"
-      NUEVOS MENSAJES: ${JSON.stringify(history)}
-      
-      TAREA: Crea un nuevo resumen corto y denso. Máximo 3 párrafos.
-    `;
-
+  async generateProgressiveSummary(history: any[], oldSummary?: string) {
     const messages = [
-      { role: 'system', content: `
-Eres un agente de soporte de monitoreo GPS.
+      {
+        role: 'system',
+        content: `
+Eres un sistema que genera resúmenes progresivos de conversaciones técnicas.
 
-Siempre debes:
-1. Usar consultar_unidad_tecnica para obtener datos reales.
-2. Si detectas unidades con más de 4 horas sin comunicación,
-   debes generar diagnóstico automáticamente.
-3. Si el usuario pide solución o soporte, usa generar_diagnostico_soporte.
-4. Nunca inventes información.
-5. Puedes trabajar con múltiples unidades al mismo tiempo.
-6. Nunca inventes información de parametros de entrada para las herramientas de mcp.
-` },
-      { role: 'user', content: promptText }
+Debes resumir la conversación manteniendo:
+- unidades consultadas
+- diagnósticos generados
+- información relevante para futuras consultas
+
+El resumen debe ser corto y útil para contexto futuro.
+`,
+      },
+      {
+        role: 'user',
+        content: `
+Resumen anterior:
+${oldSummary || 'Ninguno'}
+
+Historial reciente:
+${JSON.stringify(history.slice(-10), null, 2)}
+`,
+      },
     ];
 
-    // USAMOS chatStream pasándole:
-    // 1. Mensajes
-    // 2. Herramientas (undefined)
-    // 3. Callback de chunk (vacío, no necesitamos streaming para el resumen interno)
-    // 4. Proveedor forzado ('ollama')
-    const result = await this.llmService.chatStream(
-      messages, 
-      [], 
-      () => {}, // Callback vacío para el stream
-      this.configValue.memory.summarizerProvider,
-    );
-    
-    return result.content; 
+    const result = await this.llmService.chat(messages, []);
+
+    return result.content;
   }
 }
