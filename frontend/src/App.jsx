@@ -170,13 +170,13 @@ function NocCards({ ui, fallbackText, streaming }) {
     </div>
   );
 }
-
+const session = localStorage.getItem('lastSessionId') || crypto.randomUUID();
 function App() {
   const [sessionId, setSessionId] = useState(
-    () => localStorage.getItem('lastSessionId') || crypto.randomUUID(),
+    session
   );
   const [chatList, setChatList] = useState([]);
-  const [userId] = useState('usuario-local');
+  const [userId] = useState(session);
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState([]);
   const [status, setStatus] = useState('idle');

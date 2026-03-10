@@ -216,17 +216,20 @@ export class AgentService {
     });
 
     let unidadIds: number[] = this.parseNumberArray(rawArgs?.unidad_ids);
-    let vins: string[] = this.parseStringArray(rawArgs?.vins).filter((v) =>
-      /^[A-HJ-NPR-Z0-9]{17}$/i.test(v),
-    );
+    let vins: string[] = this.parseStringArray(rawArgs?.vins)
+      .map((v) => v.trim().toUpperCase())
+      .filter((v) => /^[A-HJ-NPR-Z0-9]{17}$/i.test(v));
+
     let imeis: string[] = this.parseStringArray(rawArgs?.imeis).filter((v) =>
       /^\d{14,15}$/.test(v),
     );
+
     let placas: string[] = this.parseStringArray(rawArgs?.placas)
       .map((v) => v.toUpperCase())
       .filter((v) => /^(?:[A-Z]{3}-\d{3,4}|[A-Z]{2,3}\d{3,4}[A-Z]?)$/.test(v));
-    let unidadNombres: string[] = this.parseStringArray(
-      rawArgs?.unidad_nombres,
+
+    let unidadNombres: string[] = this.cleanUnidadNombres(
+      this.parseStringArray(rawArgs?.unidad_nombres),
     );
 
     if (rawArgs?.unidad_id !== undefined && rawArgs?.unidad_id !== null) {
@@ -262,14 +265,40 @@ export class AgentService {
     vins = [...new Set<string>(vins)];
     imeis = [...new Set<string>(imeis)];
     placas = [...new Set<string>(placas)];
-    unidadNombres = [...new Set<string>(unidadNombres)];
+    unidadNombres = [...new Set<string>(this.cleanUnidadNombres(unidadNombres))];
 
-    if (promptUnidadIds.length) {
+    const hasRawUnidadIds = unidadIds.length > 0;
+    const hasRawVins = vins.length > 0;
+    const hasRawImeis = imeis.length > 0;
+    const hasRawPlacas = placas.length > 0;
+    const hasRawUnidadNombres = unidadNombres.length > 0;
+
+    // Prioridad correcta:
+    // 1) rawArgs válidos del modelo
+    // 2) extracción del prompt
+    // 3) memoria de sesión
+    if (hasRawUnidadIds) {
+      normalized.unidad_ids = unidadIds;
+    } else if (hasRawVins) {
+      normalized.vins = vins;
+    } else if (hasRawImeis) {
+      normalized.imeis = imeis;
+    } else if (hasRawPlacas) {
+      normalized.placas = placas;
+    } else if (hasRawUnidadNombres && !isContextualReference) {
+      normalized.unidad_nombres = unidadNombres;
+      normalized.busqueda_parcial_nombre =
+        rawArgs?.busqueda_parcial_nombre !== undefined
+          ? Boolean(rawArgs.busqueda_parcial_nombre)
+          : true;
+    } else if (promptUnidadIds.length) {
       normalized.unidad_ids = promptUnidadIds;
     } else if (promptVINs.length) {
       normalized.vins = promptVINs;
     } else if (promptImeis.length) {
       normalized.imeis = promptImeis;
+    } else if (promptPlacas.length) {
+      normalized.placas = promptPlacas;
     } else if (
       promptUnidadNombres.length &&
       !isContextualReference &&
@@ -277,46 +306,28 @@ export class AgentService {
     ) {
       normalized.unidad_nombres = promptUnidadNombres;
       normalized.busqueda_parcial_nombre = true;
-    } else if (promptPlacas.length) {
-      normalized.placas = promptPlacas;
     } else if (promptUnidadNombres.length && !isContextualReference) {
       normalized.unidad_nombres = promptUnidadNombres;
       normalized.busqueda_parcial_nombre = true;
-    } else {
-      if (unidadIds.length) {
-        normalized.unidad_ids = unidadIds;
-      } else if (vins.length) {
-        normalized.vins = vins;
-      } else if (imeis.length) {
-        normalized.imeis = imeis;
-      } else if (
-        unidadNombres.length &&
-        !isContextualReference &&
-        promptLooksLikeName
-      ) {
-        normalized.unidad_nombres = unidadNombres;
-        normalized.busqueda_parcial_nombre = true;
-      } else if (placas.length) {
-        normalized.placas = placas;
-      } else if (unidadNombres.length && !isContextualReference) {
-        normalized.unidad_nombres = unidadNombres;
-        normalized.busqueda_parcial_nombre = true;
-      } else if (ctx?.lastUnidadIds?.length) {
-        normalized.unidad_ids = ctx.lastUnidadIds;
-      } else if (ctx?.lastVins?.length) {
-        normalized.vins = ctx.lastVins;
-      } else if (ctx?.lastImeis?.length) {
-        normalized.imeis = ctx.lastImeis;
-      } else if (ctx?.lastUnidadNombres?.length) {
-        normalized.unidad_nombres = ctx.lastUnidadNombres;
-        normalized.busqueda_parcial_nombre = true;
-      } else if (ctx?.lastPlacas?.length) {
-        normalized.placas = ctx.lastPlacas;
-      }
+    } else if (ctx?.lastUnidadIds?.length) {
+      normalized.unidad_ids = ctx.lastUnidadIds;
+    } else if (ctx?.lastVins?.length) {
+      normalized.vins = ctx.lastVins;
+    } else if (ctx?.lastImeis?.length) {
+      normalized.imeis = ctx.lastImeis;
+    } else if (ctx?.lastPlacas?.length) {
+      normalized.placas = ctx.lastPlacas;
+    } else if (ctx?.lastUnidadNombres?.length) {
+      normalized.unidad_nombres = this.cleanUnidadNombres(
+        ctx.lastUnidadNombres,
+      );
+      normalized.busqueda_parcial_nombre = true;
     }
 
-    const soloMasReciente = this.detectSoloMasReciente(prompt);
-    const soloSuspendidas = this.detectSoloSuspendidas(prompt);
+    const soloMasReciente =
+      rawArgs?.solo_mas_reciente === true || this.detectSoloMasReciente(prompt);
+    const soloSuspendidas =
+      rawArgs?.solo_suspendidas === true || this.detectSoloSuspendidas(prompt);
     const horasSinComunicacion = this.normalizeHorasSinComunicacion(
       rawArgs?.horas_sin_comunicacion,
       prompt,
@@ -498,7 +509,8 @@ export class AgentService {
 
     if (cleaned.split(' ').length >= 2) return true;
 
-    if (/informacion de|información de|unidad\s+/i.test(cleaned)) return true;
+    if (/informacion de|información de|unidad\s+|unidades\s+/i.test(cleaned))
+      return true;
 
     return false;
   }
@@ -568,6 +580,37 @@ export class AgentService {
     return undefined;
   }
 
+  private cleanUnidadNombres(values: string[]): string[] {
+    return [
+      ...new Set(
+        values
+          .map((value) =>
+            String(value || '')
+              .replace(/[¿?¡!.,"]/g, ' ')
+              .replace(
+                /\b(dame|das|dime|quiero|consulta|consultar|buscar|busca|informacion|información|del|de|la|el|las|los|todas|todos|toda|todo|unidad|unidades|vehiculo|vehículo|vehiculos|vehículos|sobre|que|qué|tienes|imei|vin|placa|id|reporte|último|ultimo|su|misma|mismo|esa|ese|esta|este|y|ahora|también|tambien)\b/gi,
+                ' ',
+              )
+              .replace(/\s+/g, ' ')
+              .trim(),
+          )
+          .filter(Boolean)
+          .filter((cleaned) => !/^\d{1,6}$/.test(cleaned))
+          .filter((cleaned) => !/^\d{14,15}$/.test(cleaned))
+          .filter((cleaned) => !/^[A-HJ-NPR-Z0-9]{17}$/i.test(cleaned))
+          .filter(
+            (cleaned) =>
+              !/^(?:[A-Z]{3}-\d{3,4}|[A-Z]{2,3}\d{3,4}[A-Z]?)$/i.test(cleaned),
+          )
+          .filter(
+            (cleaned) =>
+              !/\b(reporte|último|ultimo|su|misma|mismo)\b/i.test(cleaned),
+          )
+          .filter((cleaned) => cleaned.length >= 2),
+      ),
+    ];
+  }
+
   private extractUnidadNombres(text: string): string[] {
     if (!text) return [];
 
@@ -618,48 +661,39 @@ export class AgentService {
       return [];
     }
 
-    const directRegex = /\bunidad\s+([A-ZÁÉÍÓÚa-z0-9._ -]{3,80})\b/gi;
+    const directPatterns = [
+      /\bunidades\s+([A-ZÁÉÍÓÚa-z0-9._ -]{2,80})\b/gi,
+      /\bunidad\s+([A-ZÁÉÍÓÚa-z0-9._ -]{2,80})\b/gi,
+      /\bveh[íi]culos\s+([A-ZÁÉÍÓÚa-z0-9._ -]{2,80})\b/gi,
+      /\bveh[íi]culo\s+([A-ZÁÉÍÓÚa-z0-9._ -]{2,80})\b/gi,
+    ];
+
     const directResults: string[] = [];
 
-    let match: RegExpExecArray | null;
-    while ((match = directRegex.exec(normalized)) !== null) {
-      const value = match[1]?.trim();
-      if (!value) continue;
-      if (/^\d{1,6}$/.test(value)) continue;
-      if (/^\d{14,15}$/.test(value)) continue;
-      if (/^[A-HJ-NPR-Z0-9]{17}$/i.test(value)) continue;
-      if (
-        /\b(imei|vin|placa|id|reporte|último|ultimo|misma|mismo)\b/i.test(
-          value,
-        )
-      )
-        continue;
-      directResults.push(value);
+    for (const regex of directPatterns) {
+      let match: RegExpExecArray | null;
+
+      while ((match = regex.exec(normalized)) !== null) {
+        const rawValue = match[1]?.trim();
+        if (!rawValue) continue;
+
+        const cleanedValues = this.cleanUnidadNombres([rawValue]);
+        if (!cleanedValues.length) continue;
+
+        directResults.push(...cleanedValues);
+      }
     }
 
     if (directResults.length) {
       return [...new Set(directResults)];
     }
 
-    const cleaned = normalized
-      .replace(
-        /\b(dame|das|dime|quiero|consulta|consultar|buscar|busca|informacion|información|del|de|la|el|las|los|unidad|unidades|sobre|que|qué|tienes|imei|vin|placa|id|reporte|último|ultimo|su|misma|mismo|esa|ese|esta|este|y|ahora|también|tambien)\b/gi,
-        ' ',
-      )
-      .replace(/\s+/g, ' ')
-      .trim();
+    const fallback = this.cleanUnidadNombres([normalized]);
+    if (fallback.length) {
+      return fallback;
+    }
 
-    if (!cleaned) return [];
-    if (/^\d{1,6}$/.test(cleaned)) return [];
-    if (/^\d{14,15}$/.test(cleaned)) return [];
-    if (/^[A-HJ-NPR-Z0-9]{17}$/i.test(cleaned)) return [];
-    if (/^(?:[A-Z]{3}-\d{3,4}|[A-Z]{2,3}\d{3,4}[A-Z]?)$/i.test(cleaned))
-      return [];
-    if (cleaned.length < 3) return [];
-    if (/\b(reporte|último|ultimo|su|misma|mismo)\b/i.test(cleaned))
-      return [];
-
-    return [cleaned];
+    return [];
   }
 
   private parseStringArray(value: any): string[] {
